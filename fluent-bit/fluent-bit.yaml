@@ -1,0 +1,29 @@
+# Konfigurasi Fluent Bit format YAML (didukung v5+)
+service:
+  flush: 1                                   # kirim log tiap 1 detik
+  log_level: info                            # tingkat log Fluent Bit sendiri
+  parsers_file: /fluent-bit/etc/parsers.conf # file definisi parser JSON
+
+pipeline:
+  # INPUT: terima log dari Docker (logging driver fluentd) di port 24224
+  inputs:
+    - name: forward
+      listen: 0.0.0.0
+      port: 24224
+
+  # FILTER: bongkar field "log" (JSON) jadi field terpisah (level, service, message, ts)
+  filters:
+    - name: parser
+      match: "*"
+      key_name: log
+      parser: json
+      reserve_data: true                     # tetap simpan field asli lain
+
+  # OUTPUT: kirim ke Elasticsearch, index "app-logs"
+  outputs:
+    - name: es
+      match: "*"
+      host: host.docker.internal             # alamat Elasticsearch (di host)
+      port: 9200
+      index: app-logs
+      suppress_type_name: true               # wajib untuk Elasticsearch 8/9

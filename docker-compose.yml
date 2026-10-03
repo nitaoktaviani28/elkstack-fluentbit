@@ -14,10 +14,11 @@ services:
 
   # Pengumpul log: terima log dari aplikasi, kirim ke Elasticsearch
   fluent-bit:
-    image: fluent/fluent-bit:latest
+    image: fluent/fluent-bit:5.1.3      # versi stabil terbaru (pakai config YAML)
     container_name: fluent-bit
+    command: ["-c", "/fluent-bit/etc/fluent-bit.yaml"]   # pakai config format YAML
     volumes:                            # pasang file konfigurasi dari folder lokal
-      - ./fluent-bit/fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf:ro
+      - ./fluent-bit/fluent-bit.yaml:/fluent-bit/etc/fluent-bit.yaml:ro
       - ./fluent-bit/parsers.conf:/fluent-bit/etc/parsers.conf:ro
     ports:
       - "24224:24224"                   # port tempat menerima log
