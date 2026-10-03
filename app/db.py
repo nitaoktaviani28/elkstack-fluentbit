@@ -72,9 +72,9 @@ def init_db(retries=10, delay=2):
             last_err = e
             msg = str(e).lower()
             if "authentication" in msg or "password" in msg:
-                log.error("Database initialization failed: database authentication failed")
+                log.error(f"Database initialization failed: authentication error - {e}")
                 return False
             log.warning(f"Database not ready yet (retry {i + 1}/{retries}): {e}")
             time.sleep(delay)
-    log.error("Database initialization failed: cannot connect to database")
+    log.error(f"Database initialization failed after {retries} retries: {last_err}")
     return False
