@@ -11,9 +11,37 @@ dikirim ke Elasticsearch lewat **Fluent Bit** untuk centralized logging.
 
 ## Menjalankan
 ```bash
+# Build image dan jalankan seluruh stack di background
 docker compose up -d --build
+
+# Lihat status service
+docker compose ps
+
+# Pantau log aplikasi
+docker compose logs -f app
 ```
 Buka http://localhost:8080 → Sign Up → Login → Dashboard.
+
+### Command Docker yang berguna
+```bash
+# Validasi konfigurasi Compose tanpa menjalankan container
+docker compose config
+
+# Lihat status health aplikasi
+docker inspect --format='{{.State.Health.Status}}' apotek-app
+
+# Cek endpoint health dari host
+curl http://localhost:8080/healthz
+
+# Restart aplikasi setelah perubahan konfigurasi
+docker compose restart app
+
+# Hentikan stack tanpa menghapus volume database
+docker compose down
+
+# Hentikan stack sekaligus hapus data PostgreSQL
+docker compose down -v
+```
 
 ## Konfigurasi (environment variable)
 | Variabel | Default | Keterangan |
