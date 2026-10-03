@@ -1,0 +1,42 @@
+# ============================================================
+# LAB 2 — Aplikasi + Fluent Bit (collector)
+# ============================================================
+# Elasticsearch & Kibana TIDAK dibuat di sini — pakai yang sudah
+# berjalan dari Lab 1 (akses via port host: host.docker.internal:9200).
+#
+# Alur log:
+#   demo-app (stdout JSON)
+#     -> Docker logging driver: fluentd  (ke 127.0.0.1:24224)
+#       -> Fluent Bit  (parse + kirim)
+#         -> Elasticsearch (Lab 1)  index: app-logs
+# ------------------------------------------------------------
+
+services:
+  fluent-bit:
+    image: fluent/fluent-bit:latest
+    container_name: fluent-bit
+    volumes:
+      - ./fluent-bit/fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf:ro
+      - ./fluent-bit/parsers.conf:/fluent-bit/etc/parsers.conf:ro
+    ports:
+      - "24224:24224"
+    # supaya container bisa akses Elasticsearch yg listen di host (port 9200)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  app:
+    build: ./app
+    container_name: demo-app
+    environment:
+      - SERVICE_NAME=auth-service
+      - DB_HOST=            # kosong = sehat (Lab 2). Lab 3: isi host ngaco.
+    ports:
+      - "8080:8080"
+    depends_on:
+      - fluent-bit
+    logging:
+      driver: fluentd
+      options:
+        fluentd-address: 127.0.0.1:24224
+        fluentd-async: "true"
+        tag: auth-service
