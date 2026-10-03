@@ -74,7 +74,10 @@ def signup():
             cur.close()
             conn.close()
         except Exception as e:
-            log.error(f"Signup failed for email={email}: database error - {e}")
+            reason = ("database authentication failed"
+                      if "authentication" in str(e).lower()
+                      else "database connection error")
+            log.error(f"Signup failed for user={email}: {reason}")
             flash("Terjadi kesalahan sistem. Coba lagi nanti.", "error")
             return render_template("signup.html"), 500
 
@@ -99,9 +102,12 @@ def login():
             cur.close()
             conn.close()
         except Exception as e:
-            # Kalau user/password DB salah ->
-            # "password authentication failed for user ..."
-            log.error(f"Login failed for email={email}: database error - {e}")
+            # Fokuskan log ke user yang login; ringkas alasannya tanpa
+            # membocorkan detail kredensial database (mis. nama user DB).
+            reason = ("database authentication failed"
+                      if "authentication" in str(e).lower()
+                      else "database connection error")
+            log.error(f"Login failed for user={email}: {reason}")
             flash("Terjadi kesalahan sistem. Coba lagi nanti.", "error")
             return render_template("login.html"), 500
 
@@ -135,7 +141,7 @@ def dashboard():
         cur.close()
         conn.close()
     except Exception as e:
-        log.error(f"Dashboard failed to load products: database error - {e}")
+        log.error(f"Dashboard failed to load products for user={session['user']['email']}: database connection error")
         products = []
         flash("Gagal memuat data obat.", "error")
     log.info(f"Dashboard viewed by {session['user']['email']} ({len(products)} products)")
