@@ -1,33 +1,19 @@
 import json
 import logging
 import os
-import random
-import socket
+import re
 import threading
-import time
-from collections import deque
 from datetime import datetime, timezone
 
-from flask import Flask, jsonify, render_template_string, request
+from flask import (Flask, flash, redirect, render_template, request, session,
+                   url_for)
+from werkzeug.security import check_password_hash, generate_password_hash
 
-# ------------------------------------------------------------------
-# Konfigurasi via environment variable
-# ------------------------------------------------------------------
-SERVICE_NAME = os.getenv("SERVICE_NAME", "auth-service")
-# DB_HOST sengaja KOSONG di Lab 2 (aplikasi sehat).
-# Di Lab 3 kita isi dengan host ngaco -> memicu "Database connection failed".
-DB_HOST = os.getenv("DB_HOST", "")
-DB_PORT = int(os.getenv("DB_PORT", "5432"))
+import db
 
-# Penyimpanan log terakhir + statistik (untuk ditampilkan di UI)
-RECENT_LOGS = deque(maxlen=200)
-STATS = {"total": 0, "info": 0, "warning": 0, "error": 0}
-_lock = threading.Lock()
+SERVICE_NAME = os.getenv("SERVICE_NAME", "apotek-app")
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
-# ------------------------------------------------------------------
-# Logging: semua log keluar sebagai JSON (satu baris = satu event)
-# supaya gampang di-parse Fluent Bit lalu masuk Elasticsearch.
-# ------------------------------------------------------------------
 class JsonFormatter(logging.Formatter):
     def format(self, record):
         payload = {
@@ -38,218 +24,128 @@ class JsonFormatter(logging.Formatter):
         }
         return json.dumps(payload)
 
-class UIBufferHandler(logging.Handler):
-    """Simpan log ke memori supaya bisa ditampilkan di live feed UI."""
-
-    def emit(self, record):
-        with _lock:
-            level = record.levelname
-            RECENT_LOGS.appendleft(
-                {
-                    "ts": datetime.now(timezone.utc).strftime("%H:%M:%S"),
-                    "level": level,
-                    "message": record.getMessage(),
-                }
-            )
-            STATS["total"] += 1
-            STATS[level.lower()] = STATS.get(level.lower(), 0) + 1
-
-_stream = logging.StreamHandler()
-_stream.setFormatter(JsonFormatter())
+_handler = logging.StreamHandler()
+_handler.setFormatter(JsonFormatter())
 _root = logging.getLogger()
 _root.setLevel(logging.INFO)
-_root.handlers = [_stream, UIBufferHandler()]
+_root.handlers = [_handler]
 logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
 log = logging.getLogger(SERVICE_NAME)
+
 app = Flask(__name__)
-
-def check_db():
-    """Cek koneksi ke 'database'. DB_HOST kosong = dianggap sehat.
-    DB_HOST diisi tapi tidak terjangkau -> log ERROR."""
-    if not DB_HOST:
-        return True
-    try:
-        with socket.create_connection((DB_HOST, DB_PORT), timeout=2):
-            return True
-    except Exception as e:
-        log.error(
-            f"Database connection failed: cannot reach {DB_HOST}:{DB_PORT} ({e})"
-        )
-        return False
-
-# ------------------------------------------------------------------
-# UI
-# ------------------------------------------------------------------
-INDEX_HTML = """
-<!doctype html>
-<html lang="id">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{ service }} — Demo App</title>
-<style>
-  :root { --bg:#0f172a; --card:#1e293b; --muted:#94a3b8; --line:#334155;
-          --info:#38bdf8; --warn:#fbbf24; --err:#f87171; --ok:#34d399; }
-  * { box-sizing:border-box; }
-  body { margin:0; font-family:system-ui,Segoe UI,Roboto,sans-serif;
-         background:var(--bg); color:#e2e8f0; }
-  header { padding:20px 24px; border-bottom:1px solid var(--line);
-           display:flex; align-items:center; gap:12px; }
-  header h1 { font-size:18px; margin:0; }
-  .dot { width:10px; height:10px; border-radius:50%; background:var(--ok);
-         box-shadow:0 0 10px var(--ok); }
-  .wrap { max-width:1000px; margin:0 auto; padding:24px; }
-  .stats { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:20px; }
-  .stat { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; }
-  .stat .n { font-size:26px; font-weight:700; }
-  .stat .l { font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.5px; }
-  .buttons { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin-bottom:20px; }
-  button { cursor:pointer; border:none; border-radius:10px; padding:14px 16px;
-           font-size:14px; font-weight:600; color:#0f172a; transition:transform .05s; }
-  button:active { transform:scale(.97); }
-  .b-ok   { background:var(--ok); }
-  .b-info { background:var(--info); }
-  .b-warn { background:var(--warn); }
-  .b-err  { background:var(--err); }
-  .b-burst{ background:#a78bfa; }
-  .console { background:#020617; border:1px solid var(--line); border-radius:12px;
-             height:360px; overflow-y:auto; padding:14px; font-family:ui-monospace,Menlo,Consolas,monospace;
-             font-size:13px; line-height:1.7; }
-  .row { white-space:pre-wrap; }
-  .lvl { font-weight:700; }
-  .INFO .lvl{color:var(--info);} .WARNING .lvl{color:var(--warn);}
-  .ERROR .lvl{color:var(--err);} .time{color:var(--muted);}
-  h2 { font-size:14px; color:var(--muted); margin:0 0 10px; text-transform:uppercase; letter-spacing:.5px; }
-</style>
-</head>
-<body>
-  <header>
-    <span class="dot"></span>
-    <h1>{{ service }}</h1>
-    <span style="color:var(--muted);font-size:13px;">— demo application for centralized logging</span>
-  </header>
-  <div class="wrap">
-    <div class="stats">
-      <div class="stat"><div class="n" id="s-total">0</div><div class="l">Total</div></div>
-      <div class="stat"><div class="n" style="color:var(--info)" id="s-info">0</div><div class="l">Info</div></div>
-      <div class="stat"><div class="n" style="color:var(--warn)" id="s-warning">0</div><div class="l">Warning</div></div>
-      <div class="stat"><div class="n" style="color:var(--err)" id="s-error">0</div><div class="l">Error</div></div>
-    </div>
-
-    <h2>Aksi (klik untuk menghasilkan log)</h2>
-    <div class="buttons">
-      <button class="b-ok"    onclick="hit('/api/login')">🔐 Login</button>
-      <button class="b-info"  onclick="hit('/api/health')">❤️ Health Check</button>
-      <button class="b-warn"  onclick="hit('/api/slow')">🐌 Slow Request</button>
-      <button class="b-err"   onclick="hit('/api/error')">💥 Trigger Error</button>
-      <button class="b-burst" onclick="hit('/api/burst?n=10')">⚡ Burst x10</button>
-    </div>
-
-    <h2>Live log feed</h2>
-    <div class="console" id="console"></div>
-  </div>
-
-<script>
-async function hit(url){ try { await fetch(url, {method:'POST'}); } catch(e){} refresh(); }
-async function refresh(){
-  try {
-    const [logs, stats] = await Promise.all([
-      fetch('/api/logs').then(r=>r.json()),
-      fetch('/api/stats').then(r=>r.json())
-    ]);
-    s('s-total',stats.total); s('s-info',stats.info);
-    s('s-warning',stats.warning); s('s-error',stats.error);
-    document.getElementById('console').innerHTML = logs.map(l =>
-      `<div class="row ${l.level}"><span class="time">${l.ts}</span> `+
-      `<span class="lvl">${l.level.padEnd(7)}</span> ${esc(l.message)}</div>`
-    ).join('');
-  } catch(e){}
-}
-function s(id,v){ document.getElementById(id).textContent=v; }
-function esc(t){ return (t||'').replace(/[&<>]/g, c=>({'&':'&','<':'<','>':'>'}[c])); }
-setInterval(refresh, 2000); refresh();
-</script>
-</body>
-</html>
-"""
+app.secret_key = os.getenv("SECRET_KEY", "dev-secret-key")
 
 @app.route("/")
-def index():
-    return render_template_string(INDEX_HTML, service=SERVICE_NAME)
+def home():
+    if "user" in session:
+        return redirect(url_for("dashboard"))
+    return redirect(url_for("login"))
 
-@app.route("/api/logs")
-def api_logs():
-    with _lock:
-        return jsonify(list(RECENT_LOGS))
+@app.route("/signup", methods=["GET", "POST"])
+def signup():
+    if request.method == "POST":
+        name = request.form.get("name", "").strip()
+        email = request.form.get("email", "").strip().lower()
+        password = request.form.get("password", "")
+        log.info(f"Signup attempt for email={email}")
 
-@app.route("/api/stats")
-def api_stats():
-    with _lock:
-        return jsonify(dict(STATS))
+        if not name or not EMAIL_RE.match(email) or len(password) < 6:
+            log.warning(f"Signup failed for email={email}: invalid input")
+            flash("Nama wajib, email harus valid, password minimal 6 karakter.", "error")
+            return render_template("signup.html"), 400
 
-# ------------------------------------------------------------------
-# Aksi (menghasilkan log) — dipanggil dari tombol UI atau curl
-# ------------------------------------------------------------------
-@app.route("/api/health", methods=["GET", "POST"])
-def health():
-    if check_db():
-        log.info("Health check passed")
-        return jsonify(status="healthy"), 200
-    log.warning("Health check degraded: database unreachable")
-    return jsonify(status="degraded"), 503
+        try:
+            conn = db.get_conn()
+            cur = conn.cursor()
+            cur.execute("SELECT id FROM users WHERE email=%s;", (email,))
+            if cur.fetchone():
+                cur.close()
+                conn.close()
+                log.warning(f"Signup failed for email={email}: email already registered")
+                flash("Email sudah terdaftar. Silakan login.", "error")
+                return render_template("signup.html"), 409
 
-@app.route("/api/login", methods=["GET", "POST"])
+            cur.execute(
+                "INSERT INTO users (name, email, password_hash) VALUES (%s, %s, %s);",
+                (name, email, generate_password_hash(password)),
+            )
+            conn.commit()
+            cur.close()
+            conn.close()
+        except Exception as e:
+            log.error(f"Signup failed for email={email}: database error - {e}")
+            flash("Terjadi kesalahan sistem. Coba lagi nanti.", "error")
+            return render_template("signup.html"), 500
+
+        log.info(f"New user registered successfully: email={email}")
+        flash("Pendaftaran berhasil! Silakan login.", "success")
+        return redirect(url_for("login"))
+
+    return render_template("signup.html")
+
+@app.route("/login", methods=["GET", "POST"])
 def login():
-    user = random.choice(["alice", "bob", "charlie"])
-    if not check_db():
-        log.error(f"Login failed for user={user}: database connection error - HTTP 500")
-        return jsonify(error="internal server error"), 500
-    log.info(f"User {user} logged in successfully - 200 OK")
-    return jsonify(status="logged_in", user=user)
+    if request.method == "POST":
+        email = request.form.get("email", "").strip().lower()
+        password = request.form.get("password", "")
+        log.info(f"Login attempt for email={email}")
 
-@app.route("/api/error", methods=["GET", "POST"])
-def error():
-    log.error("Unhandled exception while processing request - HTTP 500")
-    return jsonify(error="internal server error"), 500
+        try:
+            conn = db.get_conn()
+            cur = conn.cursor()
+            cur.execute("SELECT * FROM users WHERE email=%s;", (email,))
+            user = cur.fetchone()
+            cur.close()
+            conn.close()
+        except Exception as e:
+            # Kalau user/password DB salah ->
+            # "password authentication failed for user ..."
+            log.error(f"Login failed for email={email}: database error - {e}")
+            flash("Terjadi kesalahan sistem. Coba lagi nanti.", "error")
+            return render_template("login.html"), 500
 
-@app.route("/api/slow", methods=["GET", "POST"])
-def slow():
-    delay = random.uniform(2, 5)
-    log.warning(f"Slow response detected: took {delay:.1f}s")
-    time.sleep(delay)
-    return jsonify(status="ok", delay=round(delay, 1))
+        if user and check_password_hash(user["password_hash"], password):
+            session["user"] = {"name": user["name"], "email": user["email"]}
+            log.info(f"User {email} logged in successfully")
+            return redirect(url_for("dashboard"))
 
-@app.route("/api/burst", methods=["GET", "POST"])
-def burst():
-    n = min(int(request.args.get("n", 10)), 50)
-    for _ in range(n):
-        roll = random.random()
-        if roll < 0.2:
-            log.error("Unhandled exception while processing request - HTTP 500")
-        elif roll < 0.35:
-            log.warning("High response time detected")
-        else:
-            log.info("Request handled /api - 200 OK")
-    return jsonify(generated=n)
+        log.warning(f"Login failed for email={email}: invalid credentials")
+        flash("Email atau password salah.", "error")
+        return render_template("login.html"), 401
 
-# ------------------------------------------------------------------
-# Generator trafik background: log mengalir terus
-# ------------------------------------------------------------------
-def background_traffic():
-    paths = ["/", "/health", "/login", "/products", "/cart"]
-    while True:
-        path = random.choice(paths)
-        roll = random.random()
-        if roll < 0.15:
-            check_db()
-        elif roll < 0.25:
-            log.warning(f"High response time on {path}")
-        else:
-            log.info(f"Request handled {path} - 200 OK")
-        time.sleep(random.uniform(1, 3))
+    return render_template("login.html")
+
+@app.route("/logout")
+def logout():
+    user = session.get("user", {}).get("email", "unknown")
+    session.clear()
+    log.info(f"User {user} logged out")
+    return redirect(url_for("login"))
+
+@app.route("/dashboard")
+def dashboard():
+    if "user" not in session:
+        return redirect(url_for("login"))
+    try:
+        conn = db.get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM products ORDER BY name;")
+        products = cur.fetchall()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        log.error(f"Dashboard failed to load products: database error - {e}")
+        products = []
+        flash("Gagal memuat data obat.", "error")
+    log.info(f"Dashboard viewed by {session['user']['email']} ({len(products)} products)")
+    return render_template("dashboard.html", user=session["user"], products=products)
+
+@app.route("/healthz")
+def healthz():
+    return {"status": "ok"}, 200
 
 if __name__ == "__main__":
     log.info(f"Starting {SERVICE_NAME} ...")
-    threading.Thread(target=background_traffic, daemon=True).start()
+    threading.Thread(target=db.init_db, daemon=True).start()
     app.run(host="0.0.0.0", port=8080)

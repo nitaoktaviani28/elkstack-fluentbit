@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Sign Up — Apotek Sehat{% endblock %}
+{% block content %}
+<div class="card auth-card">
+  <h1>Daftar Akun</h1>
+  <p class="muted">Buat akun baru dengan email.</p>
+  <form method="post" action="{{ url_for('signup') }}">
+    <label>Nama Lengkap</label>
+    <input type="text" name="name" placeholder="Nama kamu" required>
+    <label>Email</label>
+    <input type="email" name="email" placeholder="nama@email.com" required>
+    <label>Password <span class="muted">(min. 6 karakter)</span></label>
+    <input type="password" name="password" placeholder="••••••••" minlength="6" required>
+    <button type="submit" class="btn-primary">Sign Up</button>
+  </form>
+  <p class="muted center">Sudah punya akun? <a href="{{ url_for('login') }}">Login</a></p>
+</div>
+{% endblock %}

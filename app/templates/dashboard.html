@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — Apotek Sehat{% endblock %}
+{% block content %}
+<div class="dash-head">
+  <h1>Katalog Obat</h1>
+  <p class="muted">Selamat datang, {{ user.name }} ({{ user.email }})</p>
+</div>
+<div class="grid">
+  {% for p in products %}
+  <div class="card product">
+    <div class="product-name">{{ p.name }}</div>
+    <div class="product-desc">{{ p.description }}</div>
+    <div class="product-foot">
+      <span class="price">Rp {{ "{:,}".format(p.price).replace(",", ".") }}</span>
+      <span class="stock {% if p.stock < 50 %}low{% endif %}">Stok: {{ p.stock }}</span>
+    </div>
+  </div>
+  {% else %}
+  <p class="muted">Belum ada data obat (cek koneksi database).</p>
+  {% endfor %}
+</div>
+{% endblock %}

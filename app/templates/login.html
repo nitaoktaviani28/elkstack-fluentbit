@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Login — Apotek Sehat{% endblock %}
+{% block content %}
+<div class="card auth-card">
+  <h1>Masuk</h1>
+  <p class="muted">Login untuk mengakses dashboard apotek.</p>
+  <form method="post" action="{{ url_for('login') }}">
+    <label>Email</label>
+    <input type="email" name="email" placeholder="nama@email.com" required>
+    <label>Password</label>
+    <input type="password" name="password" placeholder="••••••••" required>
+    <button type="submit" class="btn-primary">Login</button>
+  </form>
+  <p class="muted center">Belum punya akun? <a href="{{ url_for('signup') }}">Daftar di sini</a></p>
+</div>
+{% endblock %}

@@ -1,17 +1,29 @@
 # ============================================================
-# LAB 2 — Aplikasi + Fluent Bit (collector)
+# Apotek Sehat — aplikasi + PostgreSQL + Fluent Bit (logging)
 # ============================================================
-# Elasticsearch & Kibana TIDAK dibuat di sini — pakai yang sudah
-# berjalan dari Lab 1 (akses via port host: host.docker.internal:9200).
+# Elasticsearch & Kibana diasumsikan sudah berjalan terpisah,
+# diakses via host (host.docker.internal:9200).
 #
 # Alur log:
-#   demo-app (stdout JSON)
-#     -> Docker logging driver: fluentd  (ke 127.0.0.1:24224)
-#       -> Fluent Bit  (parse + kirim)
-#         -> Elasticsearch (Lab 1)  index: app-logs
+#   apotek-app (stdout JSON)
+#     -> Docker logging driver: fluentd (127.0.0.1:24224)
+#       -> Fluent Bit (parse + kirim)
+#         -> Elasticsearch  index: app-logs
 # ------------------------------------------------------------
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: apotek-db
+    environment:
+      - POSTGRES_DB=apotek
+      - POSTGRES_USER=apotek_user
+      - POSTGRES_PASSWORD=apotek_pass
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - apotek
+
   fluent-bit:
     image: fluent/fluent-bit:latest
     container_name: fluent-bit
@@ -20,23 +32,37 @@ services:
       - ./fluent-bit/parsers.conf:/fluent-bit/etc/parsers.conf:ro
     ports:
       - "24224:24224"
-    # supaya container bisa akses Elasticsearch yg listen di host (port 9200)
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
   app:
     build: ./app
-    container_name: demo-app
+    container_name: apotek-app
     environment:
-      - SERVICE_NAME=auth-service
-      - DB_HOST=            # kosong = sehat (Lab 2). Lab 3: isi host ngaco.
+      - SERVICE_NAME=apotek-app
+      - SECRET_KEY=rahasia-lab-elk
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=apotek
+      - DB_USER=${DB_USER:-apotek_user}
+      - DB_PASSWORD=${DB_PASSWORD:-apotek_pass}
     ports:
       - "8080:8080"
     depends_on:
+      - postgres
       - fluent-bit
     logging:
       driver: fluentd
       options:
         fluentd-address: 127.0.0.1:24224
         fluentd-async: "true"
-        tag: auth-service
+        tag: apotek-app
+    networks:
+      - apotek
+
+volumes:
+  pgdata:
+
+networks:
+  apotek:
+    driver: bridge
